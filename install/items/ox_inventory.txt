@@ -23,6 +23,21 @@
     weight = 100
 },
 
+['ls_emerald_pickaxe'] = {
+    label = 'Emerald Pickaxe',
+    weight = 100
+},
+
+['ls_diamond_pickaxe'] = {
+    label = 'Diamond Pickaxe',
+    weight = 100
+},
+
+['ls_unbreakable_pickaxe'] = {
+    label = 'Unbreakable Pickaxe',
+    weight = 100
+},
+
 ['ls_copper_ore'] = {
     label = 'Copper Ore',
     weight = 100
