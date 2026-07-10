@@ -9,27 +9,52 @@ local ores = {}
 -- Initialize variable to store inside mine state
 local inside = false
 
+-- Macro mining state
+local isMacroMining = false 
+local currentMacroZone = nil
+local currentMacroOre = nil
+local macroPosition = nil
+
 -- Localize export
 local mining = exports.lation_mining
 
--- Mine an ore
---- @param zoneId number
---- @param oreId number
-local function mineOre(zoneId, oreId)
+------------------------------------------------------------
+--  MINE ORE (NO SKILL CHECK VERSION)
+------------------------------------------------------------
+local function mineOre(zoneId, oreId, useSkillCheck)
     if not zoneId or not oreId then return end
 
     local zone = shared.mining.zones[zoneId]
     if not zone then return end
 
     local ore = ores[zoneId] and ores[zoneId][oreId]
-    if not ore or not DoesEntityExist(ore.entity) then return end
+    if not ore or not DoesEntityExist(ore.entity) then 
+        if not useSkillCheck and isMacroMining then
+            isMacroMining = false
+            macroPosition = nil
+            FreezeEntityPosition(cache.ped, false)
+            ShowNotification('Ore no longer available. Macro mining stopped.', 'error')
+        end
+        return 
+    end
 
+    ------------------------------------------------------------
+    -- LEVEL CHECK
+    ------------------------------------------------------------
     local level = mining:GetPlayerData('level')
     if level < zone.level then
         ShowNotification(locale('notify.not-experienced'), 'error')
+        if not useSkillCheck then
+            isMacroMining = false
+            macroPosition = nil
+            FreezeEntityPosition(cache.ped, false)
+        end
         return
     end
 
+    ------------------------------------------------------------
+    -- PICKAXE CHECK
+    ------------------------------------------------------------
     local pickaxe, item = false, nil
     for pick_level, pick_data in pairs(shared.pickaxes) do
         if pick_level <= level and HasItem(pick_data.item, 1) then
@@ -39,42 +64,195 @@ local function mineOre(zoneId, oreId)
     end
     if not pickaxe then
         ShowNotification(locale('notify.missing-pickaxe'), 'error')
+        if not useSkillCheck then
+            isMacroMining = false
+            macroPosition = nil
+            FreezeEntityPosition(cache.ped, false)
+        end
         return
     end
 
+    ------------------------------------------------------------
+    -- DURABILITY CHECK
+    ------------------------------------------------------------
     local metadata = lib.callback.await('lation_mining:getmetadata', false, item)
     local metatype = GetDurabilityType()
     local degrade = shared.pickaxes[level].degrade
+
     if not metadata or not metadata[metatype] or metadata[metatype] < degrade then
         ShowNotification(locale('notify.pickaxe-no-durability'), 'error')
+        if not useSkillCheck then
+            isMacroMining = false
+            macroPosition = nil
+            FreezeEntityPosition(cache.ped, false)
+        end
         return
     end
 
+    ------------------------------------------------------------
+    -- TIME OF DAY CHECK
+    ------------------------------------------------------------
     local hour = GetClockHours()
     local hours = shared.mining.hours
     if hour < hours.min or hour > hours.max then
         ShowNotification(locale('notify.nighttime'), 'error')
+        if not useSkillCheck then
+            isMacroMining = false
+            macroPosition = nil
+            FreezeEntityPosition(cache.ped, false)
+        end
         return
     end
 
+    ------------------------------------------------------------
+    -- DURATION CALCULATION
+    ------------------------------------------------------------
     local duration = math.random(zone.duration.min, zone.duration.max)
+
+    if useSkillCheck then
+        -- Normal mining still uses pickaxe speed multiplier
+        local speed = shared.pickaxes[level].speedMultiplier or 1.0
+        duration = math.floor(duration * speed)
+    else
+        -- Macro mining always 3× slower
+        duration = duration * 3.0
+    end
+
     local anim = client.anims.mining
-    if not anim or not duration then return end
     anim.duration = duration
 
+    ------------------------------------------------------------
+    -- FREEZE PLAYER FOR MACRO
+    ------------------------------------------------------------
+    if not useSkillCheck then
+        if not macroPosition then
+            macroPosition = GetEntityCoords(cache.ped)
+        end
+        FreezeEntityPosition(cache.ped, true)
+    end
+
+    ------------------------------------------------------------
+    -- PROGRESS BAR
+    ------------------------------------------------------------
     if ProgressBar(anim) then
-        DeleteEntity(ore.entity)
-        ores[zoneId][oreId] = { respawn = GetGameTimer() + zone.respawn }
-        TriggerServerEvent('lation_mining:minedore', zoneId, oreId)
+
+        ------------------------------------------------------------
+        -- SKILL CHECK REMOVED — ALWAYS SUCCESS
+        ------------------------------------------------------------
+        local success = true
+
+        if success then
+            DeleteEntity(ore.entity)
+            ores[zoneId][oreId] = { respawn = GetGameTimer() + zone.respawn }
+            TriggerServerEvent('lation_mining:minedore', zoneId, oreId)
+
+            ------------------------------------------------------------
+            -- MACRO MINING LOOP
+            ------------------------------------------------------------
+            if not useSkillCheck and isMacroMining then
+                if macroPosition then
+                    SetEntityCoords(cache.ped, macroPosition.x, macroPosition.y, macroPosition.z, false, false, false, false)
+                end
+                
+                SetTimeout(500, function()
+                    if isMacroMining then
+                        local waitTime = 0
+
+                        while isMacroMining and waitTime < zone.respawn do
+                            Wait(1000)
+                            waitTime = waitTime + 1000
+                        end
+
+                        Wait(1500)
+
+                        local currentOre = ores[zoneId] and ores[zoneId][oreId]
+
+                        if currentOre and DoesEntityExist(currentOre.entity) then
+                            if macroPosition then
+                                SetEntityCoords(cache.ped, macroPosition.x, macroPosition.y, macroPosition.z, false, false, false, false)
+                            end
+                            mineOre(currentMacroZone, currentMacroOre, false)
+                            return
+                        end
+
+                        if isMacroMining then
+                            isMacroMining = false
+                            macroPosition = nil
+                            FreezeEntityPosition(cache.ped, false)
+                            ShowNotification('Ore respawn timeout. Macro mining stopped.', 'error')
+                        end
+                    end
+                end)
+            else
+                FreezeEntityPosition(cache.ped, false)
+            end
+        end
+    else
+        if not useSkillCheck then
+            FreezeEntityPosition(cache.ped, false)
+            isMacroMining = false
+            macroPosition = nil
+            ShowNotification('Macro mining cancelled', 'error')
+        end
     end
 end
 
--- Spawn an ore
---- @param zoneId number
---- @param oreId number
-local function spawnOre(zoneId, oreId)
-    if not zoneId or not oreId then return end
+------------------------------------------------------------
+--  MINING MENU (NO SKILL CHECK)
+------------------------------------------------------------
+local function showMiningMenu(zoneId, oreId)
+    lib.registerContext({
+        id = 'mining_mode_menu',
+        title = 'Mining Options',
+        options = {
+            {
+                title = 'Normal Mining',
+                description = 'Fast mining (no skill check)',
+                icon = 'hammer',
+                iconColor = '#3b82f6',
+                onSelect = function()
+                    mineOre(zoneId, oreId, false)
+                end
+            },
+            {
+                title = 'Macro Mining (AFK)',
+                description = '3× Slower, No Skill Checks',
+                icon = 'robot',
+                iconColor = '#8b5cf6',
+                onSelect = function()
+                    isMacroMining = true
+                    currentMacroZone = zoneId
+                    currentMacroOre = oreId
+                    macroPosition = GetEntityCoords(cache.ped)
+                    ShowNotification('Macro mining started. Use /stopmining to stop', 'success')
+                    mineOre(zoneId, oreId, false)
+                end
+            }
+        }
+    })
+    lib.showContext('mining_mode_menu')
+end
 
+------------------------------------------------------------
+-- STOP MACRO COMMAND
+------------------------------------------------------------
+RegisterCommand('stopmining', function()
+    if isMacroMining then
+        isMacroMining = false
+        currentMacroZone = nil
+        currentMacroOre = nil
+        macroPosition = nil
+        FreezeEntityPosition(cache.ped, false)
+        ShowNotification('Macro mining stopped', 'inform')
+    else
+        ShowNotification('You are not macro mining', 'error')
+    end
+end, false)
+
+------------------------------------------------------------
+-- SPAWN ORE
+------------------------------------------------------------
+local function spawnOre(zoneId, oreId)
     local zone = shared.mining.zones[zoneId]
     if not zone then return end
 
@@ -83,11 +261,14 @@ local function spawnOre(zoneId, oreId)
 
     local models = zone.models
     local model = models[math.random(#models)]
+
     lib.requestModel(model)
     while not HasModelLoaded(model) do Wait(0) end
+
     local entity = CreateObject(model, ore.x, ore.y, ore.z, false, false, false)
     PlaceObjectOnGroundProperly(entity)
     FreezeEntityPosition(entity, true)
+
     AddTargetEntity(entity, {
         {
             name = zoneId .. oreId,
@@ -96,13 +277,10 @@ local function spawnOre(zoneId, oreId)
             iconColor = icons.mine_color,
             distance = 2,
             canInteract = function()
-                return not IsPedInAnyVehicle(cache.ped, true)
+                return not IsPedInAnyVehicle(cache.ped, true) and not isMacroMining
             end,
             onSelect = function()
-                mineOre(zoneId, oreId)
-            end,
-            action = function()
-                mineOre(zoneId, oreId)
+                showMiningMenu(zoneId, oreId)
             end
         }
     })
@@ -110,36 +288,42 @@ local function spawnOre(zoneId, oreId)
     ores[zoneId][oreId] = { entity = entity, respawn = nil }
 end
 
--- Setup on mine enter
+------------------------------------------------------------
+-- ENTER MINE
+------------------------------------------------------------
 local function enterMine()
-    inside = not inside
+    inside = true
     for zoneId, zone in pairs(shared.mining.zones) do
-        ores[zoneId] = ores[zoneId] or {}
+        ores[zoneId] = {}
         for oreId, _ in pairs(zone.ores) do
             spawnOre(zoneId, oreId)
         end
     end
 end
 
--- Cleanup on mine exit
+------------------------------------------------------------
+-- EXIT MINE
+------------------------------------------------------------
 local function exitMine()
-    inside = not inside
+    inside = false
+    isMacroMining = false
+    macroPosition = nil
+    FreezeEntityPosition(cache.ped, false)
+
     for zoneId, oreData in pairs(ores) do
         for _, data in pairs(oreData) do
             if data.entity and DoesEntityExist(data.entity) then
                 DeleteEntity(data.entity)
             end
         end
-        ores[zoneId] = nil
     end
-    for _, data in pairs(shared.mining.zones) do
-        for _, model in pairs(data.models) do
-            SetModelAsNoLongerNeeded(model)
-        end
-    end
+
+    ores = {}
 end
 
--- Ore respawn management thread
+------------------------------------------------------------
+-- RESPAWN THREAD
+------------------------------------------------------------
 CreateThread(function()
     while true do
         if inside then
@@ -157,7 +341,9 @@ CreateThread(function()
     end
 end)
 
--- Setup on player loaded
+------------------------------------------------------------
+-- PLAYER LOADED
+------------------------------------------------------------
 AddEventHandler('lation_mining:onPlayerLoaded', function()
     lib.zones.sphere({
         coords = shared.mining.center,
@@ -168,16 +354,21 @@ AddEventHandler('lation_mining:onPlayerLoaded', function()
     })
 end)
 
--- Cleanup on resource stop
---- @param resourceName string
+------------------------------------------------------------
+-- RESOURCE STOP CLEANUP
+------------------------------------------------------------
 AddEventHandler('onResourceStop', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
+
+    isMacroMining = false
+    macroPosition = nil
+    FreezeEntityPosition(cache.ped, false)
+
     for zoneId, oreData in pairs(ores) do
         for _, data in pairs(oreData) do
             if data.entity and DoesEntityExist(data.entity) then
                 DeleteEntity(data.entity)
             end
         end
-        ores[zoneId] = nil
     end
 end)
