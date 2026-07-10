@@ -1,101 +1,129 @@
--- Initalize config(s)
 local shared = require 'config.shared'
-local server = require 'config.server'
 
--- Localize export
 local mining = exports.lation_mining
 
--- Initialize table to store ore data
-local ores = {}
+------------------------------------------------------------
+--  GET PLAYER LEVEL
+------------------------------------------------------------
+local function getLevel(src)
+    return mining:GetPlayerData(src, 'level')
+end
 
--- Ore has been mined
---- @param zoneId number
---- @param oreId number
-RegisterNetEvent('lation_mining:minedore', function(zoneId, oreId)
-    if not source or not zoneId or not oreId then return end
-    local source = source
+------------------------------------------------------------
+--  ADD XP (FIXED)
+------------------------------------------------------------
+local function addXP(src, amount)
+    mining:AddPlayerData(src, 'exp', amount)
+end
 
+------------------------------------------------------------
+--  DURABILITY REDUCTION (OX INVENTORY)
+------------------------------------------------------------
+local function reduceDurability(src, itemName, amount)
+    local metatype = shared.setup.durability or 'durability'
+    exports.ox_inventory:Search(src, 'slots', itemName, function(slot)
+        if slot.metadata and slot.metadata[metatype] then
+            local new = slot.metadata[metatype] - amount
+            if new < 0 then new = 0 end
+            exports.ox_inventory:SetMetadata(src, slot.slot, metatype, new)
+        end
+    end)
+end
+
+------------------------------------------------------------
+--  GIVE ORE REWARD
+------------------------------------------------------------
+local function giveReward(src, zoneId)
     local zone = shared.mining.zones[zoneId]
     if not zone then return end
 
-    local ore = zone.ores[oreId]
-    if not ore then return end
-
-    ores[zoneId] = ores[zoneId] or {}
-    ores[zoneId][oreId] = ores[zoneId][oreId] or {}
-    local status = ores[zoneId][oreId][source]
-    if status and status.time and status.time > os.time() then return end
-
-    local coords = GetEntityCoords(GetPlayerPed(source))
-    if #(coords - ore) > 10 then return end
-
-    local level = mining:GetPlayerData(source, 'level')
-    if level < zone.level then return end
-
-    local identifier = GetIdentifier(source)
-    if not identifier then return end
-    local name = GetName(source)
-    if not name then return end
-
-    local pickaxe, data = false, {}
-    for pick_level, pick_data in pairs(shared.pickaxes) do
-        if pick_level <= level and GetItemCount(source, pick_data.item) > 0 then
-            pickaxe, data = true, pick_data
-            break
-        end
+    for _, reward in ipairs(zone.reward) do
+        local qty = math.random(reward.min, reward.max)
+        exports.ox_inventory:AddItem(src, reward.item, qty)
     end
+end
+
+------------------------------------------------------------
+--  ORE MINED EVENT
+------------------------------------------------------------
+RegisterNetEvent('lation_mining:minedore', function(zoneId, oreId)
+    local src = source
+    local level = getLevel(src)
+    local pickaxe = shared.pickaxes[level]
     if not pickaxe then return end
 
-    local items = {}
-    for _, add in pairs(zone.reward) do
-        local chance = add.chance or 100
-        if math.random(100) <= chance then
-            local quantity = math.random(add.min, add.max)
-            if not CanCarry(source, add.item, quantity) then
-                TriggerClientEvent('lation_mining:notify', source, locale('notify.cant-carry'), 'error')
-                return
-            end
-            AddItem(source, add.item, quantity)
-            mining:AddPlayerData(source, 'mined', quantity)
-            items[#items + 1] = { item = add.item, quantity = quantity }
-        end
-    end
+    -- Reduce durability
+    reduceDurability(src, pickaxe.item, pickaxe.degrade)
 
-    local metadata, metatype = GetMetadata(source, data.item), GetDurabilityType()
-    if not metadata or not metadata[metatype] or metadata[metatype] < data.degrade then return end
+    -- Give ore reward
+    giveReward(src, zoneId)
 
-    local durability = metadata[metatype] - data.degrade
-    SetMetadata(source, data.item, metatype, durability)
-
-    local addXP = math.random(zone.xp.min, zone.xp.max)
-    mining:AddPlayerData(source, 'exp', addXP)
-
-    ores[zoneId][oreId][source] = { time = os.time() + math.floor(zone.respawn / 1000) }
-
-    if server.logs.events.mined then
-        local rewards = ''
-        for _, reward in ipairs(items) do
-            rewards = rewards .. 'x' .. reward.quantity .. ' ' .. reward.item .. ', '
-        end
-        rewards = rewards:sub(1, -3)
-        PlayerLog(source, locale('logs.mined-title'), locale('logs.mined-message', name, identifier, rewards))
-    end
+    -- Add XP
+    local zone = shared.mining.zones[zoneId]
+    local xp = math.random(zone.xp.min, zone.xp.max)
+    addXP(src, xp)
 end)
 
--- Ore validation management thread
-CreateThread(function()
-    while true do
-        if next(ores) then
-            for zoneId, zoneData in pairs(ores) do
-                for oreId, status in pairs(zoneData) do
-                    if status.time and status.time <= os.time() then
-                        ores[zoneId][oreId][source] = nil
-                    end
-                end
-            end
-            Wait(1000)
-        else
-            Wait(10000)
+------------------------------------------------------------
+--  GET ITEM METADATA (OX)
+------------------------------------------------------------
+lib.callback.register('lation_mining:getmetadata', function(src, item)
+    local items = exports.ox_inventory:Search(src, 'slots', item)
+    if not items or not items[1] then return nil end
+    return items[1].metadata
+end)
+
+------------------------------------------------------------
+--  SMELTING CALLBACK
+------------------------------------------------------------
+lib.callback.register('lation_mining:smelt', function(src, ingotId)
+    local ingot = shared.smelting.ingots[ingotId]
+    if not ingot then return false end
+
+    -- Check required items
+    for _, req in ipairs(ingot.required) do
+        if exports.ox_inventory:GetItem(src, req.item, false, true) < req.quantity then
+            return false
         end
     end
+
+    -- Remove required items
+    for _, req in ipairs(ingot.required) do
+        exports.ox_inventory:RemoveItem(src, req.item, req.quantity)
+    end
+
+    -- Add ingot
+    for _, add in ipairs(ingot.add) do
+        exports.ox_inventory:AddItem(src, add.item, add.quantity)
+    end
+
+    -- Add XP
+    local xp = math.random(ingot.xp.min, ingot.xp.max)
+    addXP(src, xp)
+
+    return true
+end)
+
+------------------------------------------------------------
+--  CRAFTING CALLBACK
+------------------------------------------------------------
+lib.callback.register('lation_mining:craft', function(src, recipe)
+    if not recipe or not recipe.required then return false end
+
+    -- Check required items
+    for _, req in ipairs(recipe.required) do
+        if exports.ox_inventory:GetItem(src, req.item, false, true) < req.quantity then
+            return false
+        end
+    end
+
+    -- Remove required items
+    for _, req in ipairs(recipe.required) do
+        exports.ox_inventory:RemoveItem(src, req.item, req.quantity)
+    end
+
+    -- Add crafted item
+    exports.ox_inventory:AddItem(src, recipe.add.item, recipe.add.quantity, recipe.add.metadata or {})
+
+    return true
 end)
