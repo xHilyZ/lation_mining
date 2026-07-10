@@ -69,7 +69,6 @@ local function openShop()
         iconColor = icons.player_level_color,
         progress = progress,
         colorScheme = progress <= 25 and 'red' or progress > 25 and progress <= 75 and 'yellow' or progress > 75 and 'green',
-        readOnly = true,
         metadata = {
             { label = locale('player-data.meta-next-level'), value = nextLvlText },
             { label = locale('player-data.meta-remainder'), value = remainderText }
@@ -96,7 +95,6 @@ local function openShop()
             description = locale('stats-menu.mined-desc', math.groupdigits(player.mined)),
             icon = icons.stats_mined,
             iconColor = icons.stats_mined_color,
-            readOnly = true
         }
     end
     if show_stats and client.stats.smelted then
@@ -105,7 +103,6 @@ local function openShop()
             description = locale('stats-menu.smelted-desc', math.groupdigits(player.smelted)),
             icon = icons.stats_smelted,
             iconColor = icons.stats_smelted_color,
-            readOnly = true
         }
     end
     if show_stats and client.stats.earned then
@@ -114,7 +111,6 @@ local function openShop()
             description = locale('stats-menu.earned-desc', math.groupdigits(player.earned)),
             icon = icons.stats_earned,
             iconColor = icons.stats_earned_color,
-            readOnly = true
         }
     end
 
@@ -135,8 +131,7 @@ local function openShop()
                 title = data.name,
                 description = locale('leaderboard-menu.player-desc', data.level, math.groupdigits(data.exp), math.groupdigits(data.mined)),
                 icon = rank <= 3 and icons.leaderboard or nil,
-                iconColor = rank == 1 and 'gold' or rank == 2 and 'silver' or rank == 3 and 'brown' or nil,
-                readOnly = true,
+                iconColor = rank == 1 and 'gold' or rank == 2 and 'silver' or rank == 3 and 'brown' or '',
             }
         end
     end
@@ -164,13 +159,13 @@ local function openShop()
     end
 
     -- Register menus
-    RegisterMenu({
+    lib.registerContext({
         id = 'mine-main',
         title = locale('mine-menu.main-title'),
         options = main
     })
     if client.leaderboard then
-        RegisterMenu({
+        lib.registerContext({
             id = 'mine-leaderboards',
             menu = 'mine-main',
             title = locale('leaderboard-menu.main-title'),
@@ -178,7 +173,7 @@ local function openShop()
         })
     end
     if show_stats then
-        RegisterMenu({
+        lib.registerContext({
             id = 'mine-stats',
             menu = 'mine-main',
             title = locale('stats-menu.main-title'),
@@ -186,7 +181,7 @@ local function openShop()
         })
     end
 
-    ShowMenu('mine-main')
+    lib.showContext('mine-main')
 end
 
 -- Build shop items
@@ -206,7 +201,7 @@ local function createShop()
             args = id
         }
     end
-    RegisterMenu({
+    lib.registerContext({
         id = 'mine-shop',
         menu = 'mine-main',
         title = locale('shop-menu.main-title'),
@@ -225,7 +220,7 @@ local function createShop()
             args = id
         }
     end
-    RegisterMenu({
+    lib.registerContext({
         id = 'mine-pawn',
         menu = 'mine-main',
         title = locale('pawn-menu.main-title'),
@@ -240,17 +235,14 @@ AddEventHandler('lation_mining:shops:selectquantity', function(id)
     local config = shared.shops.mine.items[id]
     if not config then return end
     local itemData = GetItemData(config.item) or { label = 'Undefined' }
-    local input = ShowInput({
-        title = itemData.label,
-        options = {
-            {
-                type = 'number',
-                icon = icons.input_quantity,
-                label = locale('inputs.label'),
-                description = locale('inputs.desc'),
-                default = 1,
-                require = true
-            }
+    local input = lib.inputDialog(itemData.label, {
+        {
+            type = 'number',
+            icon = icons.input_quantity,
+            label = locale('inputs.label'),
+            description = locale('inputs.desc'),
+            default = 1,
+            require = true
         }
     })
     if not input or not input[1] then return end
@@ -264,17 +256,14 @@ AddEventHandler('lation_mining:pawn:selectquantity', function(id)
     local config = shared.shops.pawn.items[id]
     if not config then return end
     local itemData = GetItemData(config.item) or { label = 'Undefined' }
-    local input = ShowInput({
-        title = itemData.label,
-        options = {
-            {
-                type = 'number',
-                icon = icons.input_quantity,
-                label = locale('inputs.label'),
-                description = locale('inputs.desc'),
-                default = 1,
-                require = true
-            }
+    local input = lib.inputDialog(itemData.label, {
+        {
+            type = 'number',
+            icon = icons.input_quantity,
+            label = locale('inputs.label'),
+            description = locale('inputs.desc'),
+            default = 1,
+            require = true
         }
     })
     if not input or not input[1] then return end
